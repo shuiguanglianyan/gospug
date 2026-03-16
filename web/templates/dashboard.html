@@ -10,16 +10,23 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="logo">GOSPUG</div>
-      {{range .NavGroups}}
-      <div class="nav-group">
-        <p>{{.Title}}</p>
-        <nav>
-          {{range .Items}}
-          <a class="{{if eq $.Active .Key}}active{{end}}" href="{{.Href}}">{{.Label}}</a>
-          {{end}}
-        </nav>
-      </div>
-      {{end}}
+      <nav class="tree-nav" aria-label="侧边导航菜单">
+        {{range .NavGroups}}
+        <section class="tree-group">
+          <button class="tree-toggle" type="button" aria-expanded="false">
+            <span class="caret">▸</span>
+            <span>{{.Title}}</span>
+          </button>
+          <ul class="tree-list">
+            {{range .Items}}
+            <li>
+              <a class="tree-link {{if eq $.Active .Key}}active{{end}}" href="{{.Href}}">{{.Label}}</a>
+            </li>
+            {{end}}
+          </ul>
+        </section>
+        {{end}}
+      </nav>
       <a class="logout" href="/logout">退出登录</a>
     </aside>
 
@@ -177,6 +184,23 @@
 
   <script>
     (() => {
+      document.querySelectorAll('.tree-group').forEach((group) => {
+        const toggle = group.querySelector('.tree-toggle');
+        const list = group.querySelector('.tree-list');
+        if (!toggle || !list) return;
+
+        const hasActive = !!group.querySelector('.tree-link.active');
+        if (hasActive) {
+          group.classList.add('open');
+          toggle.setAttribute('aria-expanded', 'true');
+        }
+
+        toggle.addEventListener('click', () => {
+          const opened = group.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', opened ? 'true' : 'false');
+        });
+      });
+
       const moduleSelect = document.getElementById('moduleSelect');
       const form = document.getElementById('moduleForm');
       const msg = document.getElementById('moduleMessage');
