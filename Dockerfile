@@ -7,6 +7,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/gospug ./cmd/server
 
 FROM alpine:3.20
 WORKDIR /app
+RUN apk add --no-cache sqlite
 COPY --from=builder /bin/gospug /app/gospug
 COPY web /app/web
 EXPOSE 8080
