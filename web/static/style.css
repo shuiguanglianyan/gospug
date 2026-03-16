@@ -57,6 +57,13 @@ button {
   cursor: pointer;
 }
 
+td button {
+  width: auto;
+  margin-top: 0;
+  margin-right: 6px;
+  padding: 6px 10px;
+}
+
 .error { background: #7f1d1d; padding: 10px; border-radius: 8px; margin-bottom: 14px; }
 
 .layout { display: flex; min-height: 100vh; }
@@ -211,6 +218,41 @@ button {
 .page-list a {
   color: #93c5fd;
   text-decoration: none;
+}
+
+.module-crud {
+  margin-top: 18px;
+  background: #0b1220;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.module-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: end;
+}
+
+.module-head select {
+  width: 220px;
+  background: #0b1220;
+  color: #fff;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.module-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.module-actions button {
+  width: auto;
+  margin-top: 0;
+  padding: 10px 14px;
 }
 
 table { width: 100%; border-collapse: collapse; }
