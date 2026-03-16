@@ -80,16 +80,6 @@ td button {
 
 .logo { font-size: 24px; font-weight: 800; color: #60a5fa; }
 
-.nav-group p {
-  margin: 0 0 8px;
-  color: #64748b;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-}
-
-.sidebar nav { display: flex; flex-direction: column; gap: 6px; }
-
 .sidebar a {
   color: #cbd5e1;
   text-decoration: none;
@@ -98,8 +88,78 @@ td button {
   transition: .15s ease;
 }
 
-.sidebar a.active,
-.sidebar a:hover { background: #1e293b; color: #fff; }
+.tree-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tree-group {
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  background: #0f172a;
+  overflow: hidden;
+}
+
+.tree-toggle {
+  width: 100%;
+  margin: 0;
+  border-radius: 0;
+  border: 0;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: #94a3b8;
+  justify-content: flex-start;
+}
+
+.tree-toggle:hover {
+  background: #1e293b;
+  color: #fff;
+}
+
+.caret {
+  font-size: 12px;
+  transition: transform .15s ease;
+}
+
+.tree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tree-group.open .tree-list {
+  display: flex;
+}
+
+.tree-group.open .caret {
+  transform: rotate(90deg);
+}
+
+.tree-link {
+  display: block;
+  position: relative;
+  padding-left: 18px;
+}
+
+.tree-link::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 6px;
+  border-top: 1px solid #475569;
+}
+
+.tree-link.active,
+.tree-link:hover,
+.logout:hover { background: #1e293b; color: #fff; }
 
 .logout {
   margin-top: auto;
