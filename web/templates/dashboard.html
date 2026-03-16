@@ -119,7 +119,201 @@
           {{end}}
         </div>
       </section>
+
+      <section class="module-crud">
+        <div class="module-head">
+          <h2>菜单化功能 CRUD（主机/脚本/监控/权限/项目/发布）</h2>
+          <label>
+            当前模块
+            <select id="moduleSelect">
+              <option value="hosts">主机</option>
+              <option value="scripts">脚本</option>
+              <option value="monitor">监控</option>
+              <option value="permission">权限</option>
+              <option value="project">项目</option>
+              <option value="release">发布</option>
+            </select>
+          </label>
+        </div>
+
+        <p id="moduleMessage" class="msg" style="display:none;"></p>
+
+        <form id="moduleForm" class="editor-form">
+          <input type="hidden" id="itemId" value="" />
+          <label>名称</label>
+          <input id="itemName" required placeholder="例如：db-prod-1 / deploy-nginx" />
+          <label>负责人</label>
+          <input id="itemOwner" placeholder="例如：ops_admin" />
+          <label>状态</label>
+          <input id="itemStatus" placeholder="例如：启用 / 运行中 / 待审批" />
+          <label>备注</label>
+          <textarea id="itemRemark" rows="3" placeholder="填写说明信息"></textarea>
+          <div class="module-actions">
+            <button type="submit">保存（新增 / 更新）</button>
+            <button type="button" id="resetBtn">清空</button>
+          </div>
+        </form>
+
+        <div class="panel">
+          <h3>记录列表</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>名称</th>
+                <th>负责人</th>
+                <th>状态</th>
+                <th>备注</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="moduleTableBody"></tbody>
+          </table>
+        </div>
+      </section>
     </main>
   </div>
+
+  <script>
+    (() => {
+      const moduleSelect = document.getElementById('moduleSelect');
+      const form = document.getElementById('moduleForm');
+      const msg = document.getElementById('moduleMessage');
+      const tableBody = document.getElementById('moduleTableBody');
+      const itemId = document.getElementById('itemId');
+      const itemName = document.getElementById('itemName');
+      const itemOwner = document.getElementById('itemOwner');
+      const itemStatus = document.getElementById('itemStatus');
+      const itemRemark = document.getElementById('itemRemark');
+      const resetBtn = document.getElementById('resetBtn');
+
+      const showMessage = (text, ok = true) => {
+        msg.style.display = 'block';
+        msg.textContent = text;
+        msg.className = ok ? 'msg ok' : 'msg err';
+      };
+
+      const clearForm = () => {
+        itemId.value = '';
+        itemName.value = '';
+        itemOwner.value = '';
+        itemStatus.value = '';
+        itemRemark.value = '';
+      };
+
+      const fillForm = (item) => {
+        itemId.value = item.id || '';
+        itemName.value = item.name || '';
+        itemOwner.value = item.owner || '';
+        itemStatus.value = item.status || '';
+        itemRemark.value = item.remark || '';
+      };
+
+      const renderRows = (items) => {
+        tableBody.innerHTML = '';
+        if (!items.length) {
+          tableBody.innerHTML = '<tr><td colspan="7">暂无数据，请新增。</td></tr>';
+          return;
+        }
+        items.forEach((item) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${item.id}</td>
+            <td>${item.name || ''}</td>
+            <td>${item.owner || ''}</td>
+            <td>${item.status || ''}</td>
+            <td>${item.remark || ''}</td>
+            <td>${item.updated_at || ''}</td>
+            <td>
+              <button type="button" data-action="edit" data-id="${item.id}">编辑</button>
+              <button type="button" data-action="delete" data-id="${item.id}">删除</button>
+            </td>
+          `;
+          tableBody.appendChild(tr);
+        });
+      };
+
+      const loadItems = async () => {
+        const module = moduleSelect.value;
+        const res = await fetch(`/api/modules/items?module=${encodeURIComponent(module)}`);
+        if (!res.ok) {
+          showMessage('加载失败，请稍后重试', false);
+          return;
+        }
+        const data = await res.json();
+        renderRows(data.items || []);
+      };
+
+      moduleSelect.addEventListener('change', async () => {
+        clearForm();
+        await loadItems();
+      });
+
+      resetBtn.addEventListener('click', () => {
+        clearForm();
+      });
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = {
+          id: Number(itemId.value || 0),
+          module: moduleSelect.value,
+          name: itemName.value.trim(),
+          owner: itemOwner.value.trim(),
+          status: itemStatus.value.trim(),
+          remark: itemRemark.value.trim(),
+        };
+        const method = payload.id ? 'PUT' : 'POST';
+        const res = await fetch('/api/modules/items', {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          showMessage('保存失败，请检查必填项', false);
+          return;
+        }
+        showMessage(payload.id ? '更新成功' : '新增成功');
+        clearForm();
+        await loadItems();
+      });
+
+      tableBody.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        const action = target.getAttribute('data-action');
+        const id = Number(target.getAttribute('data-id') || 0);
+        if (!action || !id) {
+          return;
+        }
+        if (action === 'delete') {
+          const res = await fetch(`/api/modules/items?id=${id}`, { method: 'DELETE' });
+          if (!res.ok) {
+            showMessage('删除失败', false);
+            return;
+          }
+          showMessage('删除成功');
+          await loadItems();
+          return;
+        }
+        if (action === 'edit') {
+          const row = target.closest('tr');
+          if (!row) return;
+          fillForm({
+            id,
+            name: row.children[1].textContent,
+            owner: row.children[2].textContent,
+            status: row.children[3].textContent,
+            remark: row.children[4].textContent,
+          });
+        }
+      });
+
+      loadItems();
+    })();
+  </script>
 </body>
 </html>

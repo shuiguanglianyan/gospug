@@ -141,6 +141,16 @@ type editorData struct {
 	Available  []string
 }
 
+type moduleItem struct {
+	ID        int64  `json:"id"`
+	Module    string `json:"module"`
+	Name      string `json:"name"`
+	Owner     string `json:"owner"`
+	Status    string `json:"status"`
+	Remark    string `json:"remark"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 func NewServer() (*Server, error) {
 	tmpl, err := template.ParseGlob("web/templates/*.html")
 	if err != nil {
@@ -196,7 +206,145 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/settings", s.auth(s.page("settings")))
 	mux.HandleFunc("/content/upsert", s.auth(s.upsertPageContent))
 	mux.HandleFunc("/content/delete", s.auth(s.deletePageContent))
+	mux.HandleFunc("/api/modules/items", s.auth(s.moduleItemsAPI))
 	return mux
+}
+
+func (s *Server) moduleItemsAPI(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.listModuleItems(w, r)
+	case http.MethodPost:
+		s.createModuleItem(w, r)
+	case http.MethodPut:
+		s.updateModuleItem(w, r)
+	case http.MethodDelete:
+		s.deleteModuleItem(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) listModuleItems(w http.ResponseWriter, r *http.Request) {
+	module := normalizeModule(r.URL.Query().Get("module"))
+	if module == "" {
+		http.Error(w, "module is required", http.StatusBadRequest)
+		return
+	}
+	out, _, err := runSQLite(s.dbPath, fmt.Sprintf(`
+SELECT id, module, name, owner, status, remark, updated_at
+FROM module_items
+WHERE module = '%s'
+ORDER BY id DESC;
+`, sqlEsc(module)))
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	items := make([]moduleItem, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		cols := strings.Split(line, "\t")
+		if len(cols) < 7 {
+			continue
+		}
+		id, _ := strconv.ParseInt(cols[0], 10, 64)
+		items = append(items, moduleItem{ID: id, Module: cols[1], Name: cols[2], Owner: cols[3], Status: cols[4], Remark: cols[5], UpdatedAt: cols[6]})
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) createModuleItem(w http.ResponseWriter, r *http.Request) {
+	var req moduleItem
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	req.Module = normalizeModule(req.Module)
+	if req.Module == "" || strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "module and name are required", http.StatusBadRequest)
+		return
+	}
+	_, _, err := runSQLite(s.dbPath, fmt.Sprintf(`
+INSERT INTO module_items (module, name, owner, status, remark, updated_at)
+VALUES ('%s', '%s', '%s', '%s', '%s', datetime('now','localtime'));
+`, sqlEsc(req.Module), sqlEsc(strings.TrimSpace(req.Name)), sqlEsc(strings.TrimSpace(req.Owner)), sqlEsc(strings.TrimSpace(req.Status)), sqlEsc(strings.TrimSpace(req.Remark))))
+	if err != nil {
+		http.Error(w, "insert failed", http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, http.StatusCreated, map[string]string{"message": "created"})
+}
+
+func (s *Server) updateModuleItem(w http.ResponseWriter, r *http.Request) {
+	var req moduleItem
+	if err := decodeJSONBody(r, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	req.Module = normalizeModule(req.Module)
+	if req.ID == 0 || req.Module == "" || strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "id, module and name are required", http.StatusBadRequest)
+		return
+	}
+	_, _, err := runSQLite(s.dbPath, fmt.Sprintf(`
+UPDATE module_items
+SET module = '%s', name = '%s', owner = '%s', status = '%s', remark = '%s', updated_at = datetime('now','localtime')
+WHERE id = %d;
+`, sqlEsc(req.Module), sqlEsc(strings.TrimSpace(req.Name)), sqlEsc(strings.TrimSpace(req.Owner)), sqlEsc(strings.TrimSpace(req.Status)), sqlEsc(strings.TrimSpace(req.Remark)), req.ID))
+	if err != nil {
+		http.Error(w, "update failed", http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "updated"})
+}
+
+func (s *Server) deleteModuleItem(w http.ResponseWriter, r *http.Request) {
+	idText := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil || id == 0 {
+		http.Error(w, "valid id is required", http.StatusBadRequest)
+		return
+	}
+	_, _, err = runSQLite(s.dbPath, fmt.Sprintf(`DELETE FROM module_items WHERE id = %d;`, id))
+	if err != nil {
+		http.Error(w, "delete failed", http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
+}
+
+func normalizeModule(in string) string {
+	module := strings.ToLower(strings.TrimSpace(in))
+	allowed := map[string]struct{}{
+		"hosts":      {},
+		"scripts":    {},
+		"monitor":    {},
+		"permission": {},
+		"project":    {},
+		"release":    {},
+	}
+	if _, ok := allowed[module]; !ok {
+		return ""
+	}
+	return module
+}
+
+func decodeJSONBody(r *http.Request, out any) error {
+	defer r.Body.Close()
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(out)
+}
+
+func respondJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -526,6 +674,20 @@ CREATE TABLE IF NOT EXISTS page_content (
 	panels_json TEXT NOT NULL,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )
+`)
+	if err != nil {
+		return err
+	}
+	_, _, err = runSQLite(dbPath, `
+CREATE TABLE IF NOT EXISTS module_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  module TEXT NOT NULL,
+  name TEXT NOT NULL,
+  owner TEXT,
+  status TEXT,
+  remark TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 `)
 	return err
 }
