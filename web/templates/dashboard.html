@@ -78,6 +78,47 @@
         </article>
         {{end}}
       </section>
+
+      <section class="editor">
+        <h2>页面内容管理（数据库 CRUD）</h2>
+        {{if .Editor.Message}}<p class="msg ok">{{.Editor.Message}}</p>{{end}}
+        {{if .Editor.Error}}<p class="msg err">{{.Editor.Error}}</p>{{end}}
+
+        <form class="editor-form" method="post" action="/content/upsert">
+          <label>页面 key（例如 dashboard / apps / custom-page）</label>
+          <input name="key" value="{{.Editor.EditKey}}" required />
+
+          <label>标题</label>
+          <input name="title" value="{{.Editor.Current.Title}}" required />
+
+          <label>描述</label>
+          <input name="desc" value="{{.Editor.Current.Desc}}" required />
+
+          <label>概览 JSON（overview）</label>
+          <textarea name="overview_json" rows="8">{{.Editor.OverviewJS}}</textarea>
+
+          <label>快捷操作 JSON（quick actions）</label>
+          <textarea name="quick_json" rows="8">{{.Editor.QuickJS}}</textarea>
+
+          <label>面板 JSON（panels）</label>
+          <textarea name="panels_json" rows="14">{{.Editor.PanelsJS}}</textarea>
+
+          <button type="submit">保存到数据库</button>
+        </form>
+
+        <form class="editor-form danger" method="post" action="/content/delete">
+          <label>删除页面 key（dashboard 不可删）</label>
+          <input name="key" value="{{.Editor.EditKey}}" required />
+          <button type="submit">删除并回退默认内容</button>
+        </form>
+
+        <div class="page-list">
+          <strong>可编辑页面：</strong>
+          {{range .Editor.Available}}
+          <a href="/?edit={{.}}">{{.}}</a>
+          {{end}}
+        </div>
+      </section>
     </main>
   </div>
 </body>

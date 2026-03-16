@@ -5,11 +5,18 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -100,6 +107,7 @@ type dashboardData struct {
 	Overview     []overviewCard
 	QuickActions []quickAction
 	Panels       []tablePanel
+	Editor       editorData
 }
 
 type pageConfig struct {
@@ -113,11 +121,24 @@ type pageConfig struct {
 type Server struct {
 	templates    *template.Template
 	sessions     *SessionStore
+	dbPath       string
 	adminUser    string
 	adminHash    [32]byte
 	httpAddr     string
 	cookieSecure bool
 	pages        map[string]pageConfig
+	pageMu       sync.RWMutex
+}
+
+type editorData struct {
+	Message    string
+	Error      string
+	EditKey    string
+	Current    pageConfig
+	OverviewJS string
+	QuickJS    string
+	PanelsJS   string
+	Available  []string
 }
 
 func NewServer() (*Server, error) {
@@ -131,16 +152,27 @@ func NewServer() (*Server, error) {
 	hash := sha256.Sum256([]byte(adminPass))
 
 	cookieSecure, _ := strconv.ParseBool(getenv("COOKIE_SECURE", "false"))
+	dbPath := getenv("DB_PATH", "data/gospug.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, err
+	}
+
+	if err := initPageTable(dbPath); err != nil {
+		return nil, err
+	}
 
 	s := &Server{
 		templates:    tmpl,
 		sessions:     NewSessionStore(),
+		dbPath:       dbPath,
 		adminUser:    adminUser,
 		adminHash:    hash,
 		httpAddr:     getenv("HTTP_ADDR", ":8080"),
 		cookieSecure: cookieSecure,
 	}
-	s.pages = s.buildPages()
+	if err := s.syncPagesFromDB(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -162,6 +194,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/roles", s.auth(s.page("roles")))
 	mux.HandleFunc("/audit", s.auth(s.page("audit")))
 	mux.HandleFunc("/settings", s.auth(s.page("settings")))
+	mux.HandleFunc("/content/upsert", s.auth(s.upsertPageContent))
+	mux.HandleFunc("/content/delete", s.auth(s.deletePageContent))
 	return mux
 }
 
@@ -216,11 +250,15 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) page(key string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		s.pageMu.RLock()
 		cfg, ok := s.pages[key]
+		s.pageMu.RUnlock()
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
+
+		editor := s.editorFromRequest(r, key, cfg)
 
 		user, _ := s.currentUser(r)
 		data := dashboardData{
@@ -233,9 +271,118 @@ func (s *Server) page(key string) http.HandlerFunc {
 			Overview:     cfg.Overview,
 			QuickActions: cfg.QuickAction,
 			Panels:       cfg.Panels,
+			Editor:       editor,
 		}
 		s.render(w, "dashboard.html", data)
 	}
+}
+
+func (s *Server) upsertPageContent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	key := r.FormValue("key")
+	if key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+
+	cfg, err := parsePageForm(r)
+	if err != nil {
+		http.Redirect(w, r, "/"+routeForKey(key)+"?edit="+key+"&error="+err.Error(), http.StatusSeeOther)
+		return
+	}
+
+	if err := s.savePage(key, cfg); err != nil {
+		http.Error(w, "save failed", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/"+routeForKey(key)+"?edit="+key+"&msg=保存成功", http.StatusSeeOther)
+}
+
+func (s *Server) deletePageContent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	key := r.FormValue("key")
+	if key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+	if err := s.removePage(key); err != nil {
+		http.Error(w, "delete failed", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/?msg=删除成功&edit="+key, http.StatusSeeOther)
+}
+
+func (s *Server) editorFromRequest(r *http.Request, defaultKey string, cfg pageConfig) editorData {
+	editKey := r.URL.Query().Get("edit")
+	if editKey == "" {
+		editKey = defaultKey
+	}
+	s.pageMu.RLock()
+	editCfg, ok := s.pages[editKey]
+	if !ok {
+		editCfg = cfg
+		editKey = defaultKey
+	}
+	keys := make([]string, 0, len(s.pages))
+	for k := range s.pages {
+		keys = append(keys, k)
+	}
+	s.pageMu.RUnlock()
+	sort.Strings(keys)
+
+	ov, _ := json.MarshalIndent(editCfg.Overview, "", "  ")
+	qa, _ := json.MarshalIndent(editCfg.QuickAction, "", "  ")
+	pn, _ := json.MarshalIndent(editCfg.Panels, "", "  ")
+
+	return editorData{
+		Message:    r.URL.Query().Get("msg"),
+		Error:      r.URL.Query().Get("error"),
+		EditKey:    editKey,
+		Current:    editCfg,
+		OverviewJS: string(ov),
+		QuickJS:    string(qa),
+		PanelsJS:   string(pn),
+		Available:  keys,
+	}
+}
+
+func parsePageForm(r *http.Request) (pageConfig, error) {
+	cfg := pageConfig{Title: r.FormValue("title"), Desc: r.FormValue("desc")}
+	if cfg.Title == "" {
+		return cfg, errors.New("标题不能为空")
+	}
+	if err := json.Unmarshal([]byte(r.FormValue("overview_json")), &cfg.Overview); err != nil {
+		return cfg, errors.New("概览 JSON 不合法")
+	}
+	if err := json.Unmarshal([]byte(r.FormValue("quick_json")), &cfg.QuickAction); err != nil {
+		return cfg, errors.New("快捷操作 JSON 不合法")
+	}
+	if err := json.Unmarshal([]byte(r.FormValue("panels_json")), &cfg.Panels); err != nil {
+		return cfg, errors.New("表格面板 JSON 不合法")
+	}
+	return cfg, nil
+}
+
+func routeForKey(key string) string {
+	if key == "dashboard" {
+		return ""
+	}
+	return key
 }
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
@@ -366,6 +513,127 @@ func (s *Server) buildPages() map[string]pageConfig {
 			QuickAction: []quickAction{{"安全策略", "配置登录/密码策略", "/settings"}, {"通知模板", "维护消息模板", "/settings"}},
 		},
 	}
+}
+
+func initPageTable(dbPath string) error {
+	_, _, err := runSQLite(dbPath, `
+CREATE TABLE IF NOT EXISTS page_content (
+	page_key TEXT PRIMARY KEY,
+	title TEXT NOT NULL,
+	description TEXT NOT NULL,
+	overview_json TEXT NOT NULL,
+	quick_action_json TEXT NOT NULL,
+	panels_json TEXT NOT NULL,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+`)
+	return err
+}
+
+func (s *Server) syncPagesFromDB() error {
+	pages := s.buildPages()
+	out, _, err := runSQLite(s.dbPath, `
+SELECT page_key, title, description, overview_json, quick_action_json, panels_json
+FROM page_content
+`)
+	if err != nil {
+		return err
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 6 {
+			return fmt.Errorf("unexpected sqlite output columns: %d", len(fields))
+		}
+		key, title, desc := fields[0], fields[1], fields[2]
+		overviewRaw, quickRaw, panelsRaw := fields[3], fields[4], fields[5]
+		cfg := pageConfig{Title: title, Desc: desc}
+		if err := json.Unmarshal([]byte(overviewRaw), &cfg.Overview); err != nil {
+			return err
+		}
+		if err := json.Unmarshal([]byte(quickRaw), &cfg.QuickAction); err != nil {
+			return err
+		}
+		if err := json.Unmarshal([]byte(panelsRaw), &cfg.Panels); err != nil {
+			return err
+		}
+		pages[key] = cfg
+	}
+
+	s.pageMu.Lock()
+	s.pages = pages
+	s.pageMu.Unlock()
+	return nil
+}
+
+func (s *Server) savePage(key string, cfg pageConfig) error {
+	overviewRaw, err := json.Marshal(cfg.Overview)
+	if err != nil {
+		return err
+	}
+	quickRaw, err := json.Marshal(cfg.QuickAction)
+	if err != nil {
+		return err
+	}
+	panelsRaw, err := json.Marshal(cfg.Panels)
+	if err != nil {
+		return err
+	}
+
+	query := fmt.Sprintf(`
+INSERT INTO page_content (page_key, title, description, overview_json, quick_action_json, panels_json, updated_at)
+VALUES ('%s', '%s', '%s', '%s', '%s', '%s', CURRENT_TIMESTAMP)
+ON CONFLICT(page_key) DO UPDATE SET
+	title=excluded.title,
+	description=excluded.description,
+	overview_json=excluded.overview_json,
+	quick_action_json=excluded.quick_action_json,
+	panels_json=excluded.panels_json,
+	updated_at=CURRENT_TIMESTAMP;
+`, sqlEsc(key), sqlEsc(cfg.Title), sqlEsc(cfg.Desc), sqlEsc(string(overviewRaw)), sqlEsc(string(quickRaw)), sqlEsc(string(panelsRaw)))
+	if _, _, err := runSQLite(s.dbPath, query); err != nil {
+		return err
+	}
+
+	s.pageMu.Lock()
+	s.pages[key] = cfg
+	s.pageMu.Unlock()
+	return nil
+}
+
+func (s *Server) removePage(key string) error {
+	if key == "dashboard" {
+		return errors.New("dashboard 页面不能删除")
+	}
+	if _, _, err := runSQLite(s.dbPath, fmt.Sprintf(`DELETE FROM page_content WHERE page_key='%s';`, sqlEsc(key))); err != nil {
+		return err
+	}
+
+	fallback := s.buildPages()
+	s.pageMu.Lock()
+	if cfg, ok := fallback[key]; ok {
+		s.pages[key] = cfg
+	} else {
+		delete(s.pages, key)
+	}
+	s.pageMu.Unlock()
+	return nil
+}
+
+func runSQLite(dbPath, query string) (string, string, error) {
+	cmd := exec.Command("sqlite3", "-tabs", dbPath, query)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", string(out), fmt.Errorf("sqlite error: %w: %s", err, string(out))
+	}
+	return string(out), "", nil
+}
+
+func sqlEsc(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }
 
 func getenv(key, fallback string) string {

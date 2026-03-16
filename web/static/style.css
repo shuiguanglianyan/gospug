@@ -167,6 +167,52 @@ button {
 
 .panel h2 { margin-top: 0; }
 
+.editor {
+  margin-top: 18px;
+  background: #0b1220;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.editor h2 { margin-top: 0; }
+
+.editor-form {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.editor textarea {
+  width: 100%;
+  background: #0b1220;
+  color: #fff;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.editor-form.danger button {
+  background: #7f1d1d;
+}
+
+.msg {
+  padding: 8px;
+  border-radius: 8px;
+  margin: 8px 0;
+}
+
+.msg.ok { background: #14532d; }
+.msg.err { background: #7f1d1d; }
+
+.page-list { display: flex; gap: 8px; flex-wrap: wrap; }
+.page-list a {
+  color: #93c5fd;
+  text-decoration: none;
+}
+
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px; border-bottom: 1px solid #1e293b; font-size: 14px; }
 
