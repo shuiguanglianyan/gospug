@@ -10,12 +10,16 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="logo">GOSPUG</div>
-      <nav>
-        <a class="{{if eq .Active "dashboard"}}active{{end}}" href="/">总览</a>
-        <a class="{{if eq .Active "hosts"}}active{{end}}" href="/hosts">主机管理</a>
-        <a class="{{if eq .Active "tasks"}}active{{end}}" href="/tasks">任务中心</a>
-        <a class="{{if eq .Active "settings"}}active{{end}}" href="/settings">系统设置</a>
-      </nav>
+      {{range .NavGroups}}
+      <div class="nav-group">
+        <p>{{.Title}}</p>
+        <nav>
+          {{range .Items}}
+          <a class="{{if eq $.Active .Key}}active{{end}}" href="{{.Href}}">{{.Label}}</a>
+          {{end}}
+        </nav>
+      </div>
+      {{end}}
       <a class="logout" href="/logout">退出登录</a>
     </aside>
 
@@ -33,38 +37,46 @@
       </header>
 
       <section class="stats">
-        {{range $k, $v := .Stats}}
+        {{range .Overview}}
         <article class="card">
-          <h3>{{$k}}</h3>
-          <p>{{$v}}</p>
+          <h3>{{.Title}}</h3>
+          <p>{{.Value}}</p>
+          <small>{{.Trend}}</small>
         </article>
         {{end}}
       </section>
 
-      <section class="grid">
-        <article class="panel">
-          <h2>任务执行</h2>
-          <table>
-            <thead><tr><th>任务</th><th>状态</th><th>时间</th></tr></thead>
-            <tbody>
-            {{range .Tasks}}
-              <tr><td>{{.Name}}</td><td>{{.Status}}</td><td>{{.Time}}</td></tr>
-            {{end}}
-            </tbody>
-          </table>
-        </article>
+      <section class="quick-actions">
+        {{range .QuickActions}}
+        <a class="action-card" href="{{.Href}}">
+          <strong>{{.Name}}</strong>
+          <span>{{.Desc}}</span>
+        </a>
+        {{end}}
+      </section>
 
+      <section class="grid">
+        {{range .Panels}}
         <article class="panel">
-          <h2>主机列表</h2>
+          <h2>{{.Title}}</h2>
           <table>
-            <thead><tr><th>名称</th><th>IP</th><th>系统</th></tr></thead>
+            <thead>
+              <tr>
+                {{range .Headers}}<th>{{.}}</th>{{end}}
+                <th>状态</th>
+              </tr>
+            </thead>
             <tbody>
-            {{range .Servers}}
-              <tr><td>{{.Name}}</td><td>{{.IP}}</td><td>{{.OS}}</td></tr>
-            {{end}}
+              {{range .Rows}}
+              <tr>
+                {{range .Cols}}<td>{{.}}</td>{{end}}
+                <td><span class="badge {{.Badge.Class}}">{{.Badge.Text}}</span></td>
+              </tr>
+              {{end}}
             </tbody>
           </table>
         </article>
+        {{end}}
       </section>
     </main>
   </div>
