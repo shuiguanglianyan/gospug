@@ -16,10 +16,13 @@
 
 ```bash
 go mod tidy
+# 请先确保 MySQL 已启动，并可连接 config.yaml 里的 dsn
 go run ./cmd/server
 ```
 
 默认访问：`http://127.0.0.1:8080/login`
+
+默认数据库连接来自 `config.yaml` 的 `mysql.dsn`，也可通过环境变量 `MYSQL_DSN` 覆盖。
 
 ## 环境变量
 
@@ -27,6 +30,7 @@ go run ./cmd/server
 - `ADMIN_USER`：管理员用户名（默认 `admin`）
 - `ADMIN_PASSWORD`：管理员密码（默认 `spug.cc`）
 - `COOKIE_SECURE`：是否仅 HTTPS 发送 Cookie（默认 `false`）
+- `MYSQL_DSN`：可选，覆盖 `config.yaml` 中的 MySQL 连接串
 
 ## Docker 部署
 
@@ -35,6 +39,7 @@ docker build -t gospug:latest .
 docker run --rm -p 8080:8080 \
   -e ADMIN_USER=admin \
   -e ADMIN_PASSWORD=spug.cc \
+  -e MYSQL_DSN="root:root@tcp(host.docker.internal:3306)/spug?charset=utf8mb4&parseTime=true&loc=Local" \
   gospug:latest
 ```
 
@@ -51,5 +56,7 @@ cmd/server/main.go        # 主程序与页面数据
 web/templates/*.html      # 页面模板
 web/static/style.css      # 样式
 Dockerfile                # 镜像构建
-compose.yml               # 一键启动
+docker-compose.yml        # 一键启动（含 MySQL）
+config.yaml                # MySQL 连接配置
+spug.sql                   # MySQL 表结构（源自 Spug）
 ```

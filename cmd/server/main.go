@@ -12,13 +12,13 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"os/exec"
 )
 
 type User struct {
@@ -121,7 +121,7 @@ type pageConfig struct {
 type Server struct {
 	templates    *template.Template
 	sessions     *SessionStore
-	dbPath       string
+	db           mysqlConn
 	adminUser    string
 	adminHash    [32]byte
 	httpAddr     string
@@ -151,6 +151,14 @@ type moduleItem struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
+type mysqlConn struct {
+	User     string
+	Password string
+	Host     string
+	Port     string
+	Database string
+}
+
 func NewServer() (*Server, error) {
 	tmpl, err := template.ParseGlob("web/templates/*.html")
 	if err != nil {
@@ -162,19 +170,25 @@ func NewServer() (*Server, error) {
 	hash := sha256.Sum256([]byte(adminPass))
 
 	cookieSecure, _ := strconv.ParseBool(getenv("COOKIE_SECURE", "false"))
-	dbPath := getenv("DB_PATH", "data/gospug.db")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+	dsn, err := loadMySQLDSN("config.yaml")
+	if err != nil {
 		return nil, err
 	}
-
-	if err := initPageTable(dbPath); err != nil {
+	db, err := parseMySQLDSN(dsn)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := runMySQL(db, "SELECT 1;"); err != nil {
+		return nil, err
+	}
+	if err := initTables(db); err != nil {
 		return nil, err
 	}
 
 	s := &Server{
 		templates:    tmpl,
 		sessions:     NewSessionStore(),
-		dbPath:       dbPath,
+		db:           db,
 		adminUser:    adminUser,
 		adminHash:    hash,
 		httpAddr:     getenv("HTTP_ADDR", ":8080"),
@@ -184,6 +198,62 @@ func NewServer() (*Server, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+func loadMySQLDSN(path string) (string, error) {
+	if dsn := strings.TrimSpace(os.Getenv("MYSQL_DSN")); dsn != "" {
+		return dsn, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "dsn:") {
+			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "dsn:"))
+			val = strings.Trim(val, `"'`)
+			if val != "" {
+				return val, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("mysql.dsn is required in %s", path)
+}
+
+func parseMySQLDSN(dsn string) (mysqlConn, error) {
+	var cfg mysqlConn
+	parts := strings.SplitN(dsn, "@tcp(", 2)
+	if len(parts) != 2 {
+		return cfg, fmt.Errorf("invalid mysql dsn")
+	}
+	cred := strings.SplitN(parts[0], ":", 2)
+	if len(cred) != 2 {
+		return cfg, fmt.Errorf("invalid mysql dsn credentials")
+	}
+	hostPart := strings.SplitN(parts[1], ")/", 2)
+	if len(hostPart) != 2 {
+		return cfg, fmt.Errorf("invalid mysql dsn host")
+	}
+	hostPort := strings.SplitN(hostPart[0], ":", 2)
+	if len(hostPort) != 2 {
+		return cfg, fmt.Errorf("invalid mysql dsn host port")
+	}
+	dbName := strings.SplitN(hostPart[1], "?", 2)[0]
+	cfg = mysqlConn{User: cred[0], Password: cred[1], Host: hostPort[0], Port: hostPort[1], Database: dbName}
+	if cfg.User == "" || cfg.Host == "" || cfg.Port == "" || cfg.Database == "" {
+		return cfg, fmt.Errorf("invalid mysql dsn")
+	}
+	return cfg, nil
+}
+
+func runMySQL(cfg mysqlConn, query string) (string, string, error) {
+	cmd := exec.Command("mysql", "--batch", "--raw", "--skip-column-names", "-h", cfg.Host, "-P", cfg.Port, "-u", cfg.User, "-p"+cfg.Password, cfg.Database, "-e", query)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", string(out), fmt.Errorf("mysql error: %w: %s", err, string(out))
+	}
+	return string(out), "", nil
 }
 
 func (s *Server) routes() http.Handler {
@@ -231,8 +301,8 @@ func (s *Server) listModuleItems(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "module is required", http.StatusBadRequest)
 		return
 	}
-	out, _, err := runSQLite(s.dbPath, fmt.Sprintf(`
-SELECT id, module, name, owner, status, remark, updated_at
+	out, _, err := runMySQL(s.db, fmt.Sprintf(`
+SELECT id, module, name, owner, status, remark, DATE_FORMAT(updated_at, '%%Y-%%m-%%d %%H:%%i:%%s')
 FROM module_items
 WHERE module = '%s'
 ORDER BY id DESC;
@@ -241,14 +311,13 @@ ORDER BY id DESC;
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	items := make([]moduleItem, 0, len(lines))
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		cols := strings.Split(line, "\t")
+		cols := strings.Split(line, "	")
 		if len(cols) < 7 {
 			continue
 		}
@@ -269,9 +338,9 @@ func (s *Server) createModuleItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "module and name are required", http.StatusBadRequest)
 		return
 	}
-	_, _, err := runSQLite(s.dbPath, fmt.Sprintf(`
+	_, _, err := runMySQL(s.db, fmt.Sprintf(`
 INSERT INTO module_items (module, name, owner, status, remark, updated_at)
-VALUES ('%s', '%s', '%s', '%s', '%s', datetime('now','localtime'));
+VALUES ('%s', '%s', '%s', '%s', '%s', NOW());
 `, sqlEsc(req.Module), sqlEsc(strings.TrimSpace(req.Name)), sqlEsc(strings.TrimSpace(req.Owner)), sqlEsc(strings.TrimSpace(req.Status)), sqlEsc(strings.TrimSpace(req.Remark))))
 	if err != nil {
 		http.Error(w, "insert failed", http.StatusInternalServerError)
@@ -291,9 +360,9 @@ func (s *Server) updateModuleItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id, module and name are required", http.StatusBadRequest)
 		return
 	}
-	_, _, err := runSQLite(s.dbPath, fmt.Sprintf(`
+	_, _, err := runMySQL(s.db, fmt.Sprintf(`
 UPDATE module_items
-SET module = '%s', name = '%s', owner = '%s', status = '%s', remark = '%s', updated_at = datetime('now','localtime')
+SET module = '%s', name = '%s', owner = '%s', status = '%s', remark = '%s', updated_at = NOW()
 WHERE id = %d;
 `, sqlEsc(req.Module), sqlEsc(strings.TrimSpace(req.Name)), sqlEsc(strings.TrimSpace(req.Owner)), sqlEsc(strings.TrimSpace(req.Status)), sqlEsc(strings.TrimSpace(req.Remark)), req.ID))
 	if err != nil {
@@ -310,7 +379,7 @@ func (s *Server) deleteModuleItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "valid id is required", http.StatusBadRequest)
 		return
 	}
-	_, _, err = runSQLite(s.dbPath, fmt.Sprintf(`DELETE FROM module_items WHERE id = %d;`, id))
+	_, _, err = runMySQL(s.db, fmt.Sprintf(`DELETE FROM module_items WHERE id = %d;`, id))
 	if err != nil {
 		http.Error(w, "delete failed", http.StatusInternalServerError)
 		return
@@ -663,30 +732,32 @@ func (s *Server) buildPages() map[string]pageConfig {
 	}
 }
 
-func initPageTable(dbPath string) error {
-	_, _, err := runSQLite(dbPath, `
+func initTables(db mysqlConn) error {
+	_, _, err := runMySQL(db, `
 CREATE TABLE IF NOT EXISTS page_content (
-	page_key TEXT PRIMARY KEY,
+	page_key VARCHAR(64) PRIMARY KEY,
 	title TEXT NOT NULL,
 	description TEXT NOT NULL,
-	overview_json TEXT NOT NULL,
-	quick_action_json TEXT NOT NULL,
-	panels_json TEXT NOT NULL,
-	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
+	overview_json LONGTEXT NOT NULL,
+	quick_action_json LONGTEXT NOT NULL,
+	panels_json LONGTEXT NOT NULL,
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
 `)
 	if err != nil {
 		return err
 	}
-	_, _, err = runSQLite(dbPath, `
+	_, _, err = runMySQL(db, `
 CREATE TABLE IF NOT EXISTS module_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  module TEXT NOT NULL,
-  name TEXT NOT NULL,
-  owner TEXT,
-  status TEXT,
-  remark TEXT,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+	id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+	module VARCHAR(64) NOT NULL,
+	name VARCHAR(255) NOT NULL,
+	owner VARCHAR(128) DEFAULT '',
+	status VARCHAR(64) DEFAULT '',
+	remark TEXT,
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (id),
+	KEY idx_module_items_module (module)
 );
 `)
 	return err
@@ -694,9 +765,9 @@ CREATE TABLE IF NOT EXISTS module_items (
 
 func (s *Server) syncPagesFromDB() error {
 	pages := s.buildPages()
-	out, _, err := runSQLite(s.dbPath, `
+	out, _, err := runMySQL(s.db, `
 SELECT page_key, title, description, overview_json, quick_action_json, panels_json
-FROM page_content
+FROM page_content;
 `)
 	if err != nil {
 		return err
@@ -706,9 +777,9 @@ FROM page_content
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
+		fields := strings.Split(line, "	")
 		if len(fields) != 6 {
-			return fmt.Errorf("unexpected sqlite output columns: %d", len(fields))
+			return fmt.Errorf("unexpected mysql output columns: %d", len(fields))
 		}
 		key, title, desc := fields[0], fields[1], fields[2]
 		overviewRaw, quickRaw, panelsRaw := fields[3], fields[4], fields[5]
@@ -747,16 +818,16 @@ func (s *Server) savePage(key string, cfg pageConfig) error {
 
 	query := fmt.Sprintf(`
 INSERT INTO page_content (page_key, title, description, overview_json, quick_action_json, panels_json, updated_at)
-VALUES ('%s', '%s', '%s', '%s', '%s', '%s', CURRENT_TIMESTAMP)
-ON CONFLICT(page_key) DO UPDATE SET
-	title=excluded.title,
-	description=excluded.description,
-	overview_json=excluded.overview_json,
-	quick_action_json=excluded.quick_action_json,
-	panels_json=excluded.panels_json,
-	updated_at=CURRENT_TIMESTAMP;
+VALUES ('%s', '%s', '%s', '%s', '%s', '%s', NOW())
+ON DUPLICATE KEY UPDATE
+	title = VALUES(title),
+	description = VALUES(description),
+	overview_json = VALUES(overview_json),
+	quick_action_json = VALUES(quick_action_json),
+	panels_json = VALUES(panels_json),
+	updated_at = NOW();
 `, sqlEsc(key), sqlEsc(cfg.Title), sqlEsc(cfg.Desc), sqlEsc(string(overviewRaw)), sqlEsc(string(quickRaw)), sqlEsc(string(panelsRaw)))
-	if _, _, err := runSQLite(s.dbPath, query); err != nil {
+	if _, _, err := runMySQL(s.db, query); err != nil {
 		return err
 	}
 
@@ -770,7 +841,7 @@ func (s *Server) removePage(key string) error {
 	if key == "dashboard" {
 		return errors.New("dashboard 页面不能删除")
 	}
-	if _, _, err := runSQLite(s.dbPath, fmt.Sprintf(`DELETE FROM page_content WHERE page_key='%s';`, sqlEsc(key))); err != nil {
+	if _, _, err := runMySQL(s.db, fmt.Sprintf(`DELETE FROM page_content WHERE page_key='%s';`, sqlEsc(key))); err != nil {
 		return err
 	}
 
@@ -783,15 +854,6 @@ func (s *Server) removePage(key string) error {
 	}
 	s.pageMu.Unlock()
 	return nil
-}
-
-func runSQLite(dbPath, query string) (string, string, error) {
-	cmd := exec.Command("sqlite3", "-tabs", dbPath, query)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", string(out), fmt.Errorf("sqlite error: %w: %s", err, string(out))
-	}
-	return string(out), "", nil
 }
 
 func sqlEsc(s string) string {

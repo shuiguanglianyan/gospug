@@ -7,8 +7,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/gospug ./cmd/server
 
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/alpine:3.20
 WORKDIR /app
-RUN apk add --no-cache sqlite
+RUN apk add --no-cache mysql-client
 COPY --from=builder /bin/gospug /app/gospug
 COPY web /app/web
+COPY config.yaml /app/config.yaml
 EXPOSE 8080
 ENTRYPOINT ["/app/gospug"]
