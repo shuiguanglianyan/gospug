@@ -8,7 +8,8 @@
 
 - 登录页（默认 `admin / spug.cc`，可配置）
 - 登录会话（HttpOnly Cookie）
-- 控制台总览、主机管理、任务中心、系统设置
+- Spug 风格多模块后台（总览、应用发布、主机管理、脚本库、计划任务、流水线、审批、告警、用户、角色、审计、设置）
+- 每个模块提供概览卡片、快捷操作、表格数据展示
 - 深色后台样式，接近 Spug 的视觉布局
 
 ## 本地启动
@@ -46,7 +47,7 @@ docker compose up -d --build
 ## 目录结构
 
 ```text
-cmd/server/main.go        # 主程序
+cmd/server/main.go        # 主程序与页面数据
 web/templates/*.html      # 页面模板
 web/static/style.css      # 样式
 Dockerfile                # 镜像构建
