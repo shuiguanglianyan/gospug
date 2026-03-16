@@ -1,6 +1,20 @@
 services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: spug
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./spug.sql:/docker-entrypoint-initdb.d/01-spug.sql:ro
+
   gospug:
     build: .
+    depends_on:
+      - mysql
     ports:
       - "8080:8080"
     environment:
@@ -8,3 +22,7 @@ services:
       ADMIN_USER: "admin"
       ADMIN_PASSWORD: "spug.cc"
       COOKIE_SECURE: "false"
+      MYSQL_DSN: "root:root@tcp(mysql:3306)/spug?charset=utf8mb4&parseTime=true&loc=Local"
+
+volumes:
+  mysql_data:
