@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="login-page">
+  <div class="login-card">
+    <h1>Spug 风格控制台</h1>
+    <p>请输入管理员账号</p>
+    {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+    <form method="post" action="/login">
+      <label>用户名</label>
+      <input name="username" placeholder="admin" required />
+      <label>密码</label>
+      <input name="password" type="password" placeholder="spug.cc" required />
+      <button type="submit">登录</button>
+    </form>
+    <small>默认账号：admin / spug.cc（可通过环境变量覆盖）</small>
+  </div>
+</body>
+</html>
